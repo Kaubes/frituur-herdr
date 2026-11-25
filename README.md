@@ -114,8 +114,8 @@ mistakes.
 | `tools/sprites.py` | Bakes all art into `mods/frituur/art`, once per light (about 6 minutes; needs `numpy` and `Pillow`) |
 | `RECIPE.md` | The brief another agent can rebuild this layout from |
 
-## Credits
+## Licence and credits
 
-Font: Jersey 15 (SIL Open Font License, text included). The hook plumbing follows
+MIT, see [LICENSE](LICENSE). Font: Jersey 15 (SIL Open Font License, text included). The hook plumbing follows
 [World of Codecraft](https://github.com/kevinpardo/world-of-codecraft) (MIT). The bell is synthesised.
 No real brands appear in the shop.
