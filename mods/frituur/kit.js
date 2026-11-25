@@ -1,8 +1,8 @@
 // Shared bits: palette, font, sprites and small helpers.
 
-import { image } from "gpui-kit";
+import { div, image } from "gpui-kit";
 import { shared, setShared } from "herdr";
-import { SPRITES } from "./sprites-data.js";
+import { IDLE, SPRITES } from "./sprites-data.js";
 
 export const ART = "mods/frituur/art";
 export const FONT = "Jersey 15"; // fonts/, OFL
@@ -35,11 +35,12 @@ export function clip(s, n) {
   return s.length > n ? s.slice(0, Math.max(1, n - 1)).trimEnd() + "…" : s;
 }
 
-/** A sprite with its anchor on (x, y), native pixels. `s` = { k: art scale, u: px per native pixel }. */
+/** A sprite with its anchor on (x, y), native pixels. `s` = { k: art scale, u: px per native pixel, l: the light
+ *  (ochtend, middag, avond, nacht, grijs; the art is baked once for each) }. */
 export function sprite(s, name, x, y) {
-  const d = SPRITES[name];
-  if (!d) return image(`${ART}/${s.k}x/s/vonk.png`).absolute().w(0).h(0);
-  return image(`${ART}/${s.k}x/s/${name}.png`).absolute().left((x - d[2]) * s.u).top((y - d[3]) * s.u).w(d[0] * s.u).h(d[1] * s.u);
+  const d = SPRITES[name], l = s.l ?? "avond";
+  if (!d) return image(`${ART}/${s.k}x/${l}/s/vonk.png`).absolute().w(0).h(0);
+  return image(`${ART}/${s.k}x/${l}/s/${name}.png`).absolute().left((x - d[2]) * s.u).top((y - d[3]) * s.u).w(d[0] * s.u).h(d[1] * s.u);
 }
 
 /** Two frames in turn: both always drawn, opposite opacity loops (a swap never loads an image). */
@@ -48,6 +49,30 @@ export function frames2(s, a, b, x, y, period) {
     sprite(s, a, x, y).loop("opacity", { from: 7, to: -6, period, easing: "linear" }),
     sprite(s, b, x, y).loop("opacity", { from: -6, to: 7, period, easing: "linear" }),
   ];
+}
+
+/** One name: that sprite. Two: they take turns, a full round every `period` ms. */
+export function beurt(s, namen, x, y, period) {
+  return namen.length > 1 ? frames2(s, namen[0], namen[1], x, y, period) : [sprite(s, namen[0], x, y)];
+}
+
+// How often (ms, plus a share of the second number that differs per person) and how long each idle thing is done.
+const RITME = { oog: [3600, 2600, 150], kijk: [15000, 12000, 1700], hap: [3800, 2400, 800], kwispel: [6500, 3000, 1300], zak: [11000, 6000, 2200], veeg0: [21000, 9000, 3000], schrijf: [17000, 8000, 2600] };
+const STEIL = 240; // how sharply one picture gives way to the other
+
+/** A standing sprite that lives: now and then another sprite takes its place for a moment (a blink, a look at the
+ *  menu, a bite), each on a rhythm of its own. It is all opacity loops, so no timer runs and nothing is redrawn. */
+export function leeft(s, naam, x, y, seed) {
+  let el = [sprite(s, naam, x, y)];
+  for (const g of IDLE[naam] ?? []) {
+    const [om, spreiding, duur] = RITME[g[0].split("-").at(-1)] ?? RITME.kijk;
+    const T = om + (hash(`${seed}-${g[0]}`) % spreiding), f = duur / T, laag = 0.5 - STEIL * (1 - f), hoog = 0.5 + STEIL * f;
+    el = [
+      div().absolute().left(0).top(0).loop("opacity", { from: 1 - laag, to: 1 - hoog, period: T, easing: "linear" }).children(el),
+      div().absolute().left(0).top(0).loop("opacity", { from: laag, to: hoog, period: T, easing: "linear" }).children(beurt(s, g, x, y, 760)),
+    ];
+  }
+  return el;
 }
 
 export function findNode(n, id) {

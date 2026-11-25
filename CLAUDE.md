@@ -17,13 +17,13 @@ plumbing follows World of Codecraft (https://github.com/kevinpardo/world-of-code
 | Path | What |
 |---|---|
 | `layouts/Frituur.json`, `themes/Frituur.json` | The window (order rail, shop, terminal drawer, tab bar) and its colours |
-| `mods/frituur/` | The mod: `zaak.js` (shop), `bonnen.js` (rail), `tabs.js` (bar), `paal.js` (post), `staat.js` (sessions), `loper.js` (walking), `tekst.js` (every string) |
-| `mods/frituur/art/{2,3,4}x`, `*-data.js` | **Generated**, never edit: 1:1 art per scale, anchors and sprite sizes |
+| `mods/frituur/` | The mod: `zaak.js` (shop), `bonnen.js` (rail), `tabs.js` (bar), `paal.js` (post), `staat.js` (sessions), `loper.js` (walking), `weer.js` (time of day, season, weather), `tekst.js` (every string) |
+| `mods/frituur/art/{2,3,4}x/<light>`, `*-data.js` | **Generated**, never edit: 1:1 art per scale and per light (`ochtend`, `middag`, `avond`, `nacht`, `grijs`), anchors, sprite sizes, idle and decor tables |
 | `integrations/claude-code/frituur-hook.py` | Claude Code hook, writes `~/.local/state/frituur/<HC_TERMINAL_ID>.json` |
-| `tools/scene.py`, `tools/people.py`, `tools/props.py`, `tools/sprites.py` | Draw the room / the people / the food and tools; `python tools/sprites.py` bakes them all, with the effects (45 s; needs numpy + Pillow) |
+| `tools/scene.py`, `tools/people.py`, `tools/props.py`, `tools/sprites.py` | Draw the room / the people / the food, the season's things and the weather; `python tools/sprites.py` bakes them all in every light, with the effects (6 minutes; needs numpy + Pillow; `--licht nacht` bakes one light to try something) |
 | `tools/install.py` | Copies everything into Herdr (`--hook` registers the hook, `--bel` sets the bell sound, `--unhook` undoes) |
 | `tools/fake_sessions.py` | Tests the hook. `tools/fake_agent.py`: a pretend Claude for a Herdr terminal |
-| `assets/` | The room at native size and 3x, and `anchors.json` (generated, native pixels) |
+| `assets/` | The room at native size (once per light) and 3x, and `anchors.json` (generated, native pixels) |
 
 Working on it: edit here, `python tools/install.py`, `herdr-app check mods/frituur`, `herdr-app status`
 (no errors), `herdr-app shot x.png` and look at it. `"demo": true` in a block's props shows fixed
@@ -38,7 +38,17 @@ Things learned the hard way:
 - Closing the drawer hides the terminals (`layout.hide main`): resizing them to nothing would make
   the programs in them redraw.
 - The front overlay holds whole objects only (no floor), else it cuts off the feet of people who queue.
-- A second Herdr window needs its own short `HERDR_APP_HOME`; the terminal engine is shared anyway.
+- A second Herdr window needs its own short `HERDR_APP_HOME`; the terminal engine is shared anyway. Put
+  `{"frame.welcomed":"skipped"}` in its `shared.json` and `{"last_run":"<version>","presented":[]}` in its
+  `update-notes.json` before the first start, or the welcome and update notices sit on every screenshot.
+- `loop`'s `period` is the whole swing, there and back. Opacity on a wrapper also fades its children, so loops nest:
+  that is how idle frames work (`leeft` in `kit.js`), with no timer.
+- The counter overlay holds everything nearer than the back of the counter: floor, window and door too. Anything
+  drawn on those (leaves, rain on the glass) goes after it, in the `toog` layer, or it is covered.
+- Lights: `LICHT` in `scene.py` is the one table (sun, sky, lamps, the view through the glass, what reaches the
+  people). The evening is the designed light and must stay pixel-identical when the others change.
+- Test the time, season and weather without clicking: `herdr-app do frituur.tijd` (also `.seizoen`, `.weer`) goes
+  to the next choice.
 
 ## Data: how the scene knows what agents are doing
 
@@ -67,6 +77,10 @@ World of Codecraft uses this same hook-writes-JSON approach; copy its plumbing.
 | Blocked (needs permission or input) | Bell rings; customer leans in: "Welke saus?" |
 | Turn finished | "Nummer 12!" — a cone of fries appears on the counter |
 | Finished but ignored for a while | Steam stops, fries go cold |
+
+Around that, not tied to any session: the light follows the time of day, the decoration the season, and the weather
+is made up per day (or real, with `"plaats": [lat, lon]` in the zaak block's props). People standing or eating do
+small things now and then. All three can be set by hand: buttons under the rail, the commands above, or props.
 
 ## Several sessions at once
 

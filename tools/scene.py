@@ -331,14 +331,15 @@ def mesh_fn(P, N):
     if top.any(): col[top] = fries_fn(P[top], N[top]) * 0.9
     return col
 
+WIN = ((1.0, 0.62, 0.26), (1.0, 0.88, 0.56), (0.80, 0.40, 0.22), 1.0)   # the view through the glass: low sky, high sky, roofs, glow
 def window_fn(P, N):
     y = P[:, 1]
     t = np.clip((y - 1.0) / 1.6, 0, 1)[:, None]
-    col = A(1.0, 0.62, 0.26) * (1 - t) + A(1.0, 0.88, 0.56) * t
+    col = A(*WIN[0]) * (1 - t) + A(*WIN[1]) * t
     sky = vnoise(P[:, 2] * 2.3 + P[:, 0] * 2.3, y * 6)
     col *= (0.9 + 0.15 * sky)[:, None]
     roofs = y < 1.28 + 0.22 * (h2(np.floor((P[:, 2] + P[:, 0]) * 2.6), 3.0))
-    col[roofs] = A(0.80, 0.40, 0.22)
+    col[roofs] = A(*WIN[2])
     return col
 
 def stripes_fn(cx, cz, n, c1, c2):
@@ -431,6 +432,7 @@ TALL = mat(fn=sidewall_fn, shadow=False)
 box(-4.6, XL, 3.9, 14, -2, ZB, TALL); box(XR, 4.6, 3.9, 14, -2, ZB, TALL)
 HID = mat(sunonly=True)
 box(-4.6, 4.6, 3.9, 4.0, -16, ZB + 0.4, HID); box(-4.6, XL, 0, 14, -16, -2, HID); box(-4.8, -4.6, 3.9, 40, -16, ZB + 0.4, HID)
+box(XR, 4.6, 0, 14, -16, -2, HID); box(4.6, 4.8, 3.9, 40, -16, ZB + 0.4, HID)
 FR = mat(fn=wood((0.40, 0.21, 0.11), 0.5))
 for z in (WZ0, 1.47, 2.13, WZ1 - 0.06): box(-4.26, -4.19, WY0, WY1, z, z + 0.06, FR)
 for y in (WY0, 1.78, WY1 - 0.06): box(-4.26, -4.19, y, y + 0.06, WZ0, WZ1, FR)
@@ -790,7 +792,49 @@ for k in np.unique(bid[hitm]):
         em[f] = e[v, u] if isinstance(e, np.ndarray) else e
     alb[mask] = col; emi[mask] = em
 
-# ------------------------------------------------------------------ lighting
+# ------------------------------------------------------------------ the light, once per time of day
+# "avond" is the room as it was designed: a low orange sun through the window. The others light the same room differently.
+#   sun, sunc  direction to the sun and its colour (None: no sun)      sky, amb  light from above, and what is always there
+#   beam       dusty sunbeams                                          win       the view through the glass (see WIN)
+#   w          how strongly each group of lamps in LAMPS burns          glow      colour of the light the window and the door give off
+#   k, kfill, wfill   for the people (tools/people.py): how much sun reaches a customer, and the lit room behind the viewer
+LICHT = {
+    "ochtend": dict(sun=(0.80, 0.42, -0.30), sunc=(2.6, 2.15, 1.5), sky=(0.76, 0.74, 0.70), amb=(0.16, 0.16, 0.19), beam=(0.085, 0.078, 0.060),
+                    win=((1.0, 0.84, 0.66), (0.78, 0.89, 1.0), (0.50, 0.44, 0.46), 0.95), w=dict(lamp=1, zon_o=1, raam=0.55, deur=1.25), glow=(1.0, 0.90, 0.74),
+                    k=0.14, kfill=(0.25, 0.24, 0.22), wfill=(0.30, 0.27, 0.23)),
+    "middag": dict(sun=(-0.45, 0.85, -0.28), sunc=(2.9, 2.7, 2.3), sky=(0.90, 0.90, 0.88), amb=(0.19, 0.19, 0.21), beam=(0.05, 0.048, 0.042),
+                   win=((0.86, 0.93, 1.0), (0.58, 0.80, 1.0), (0.60, 0.50, 0.44), 0.95), w=dict(lamp=1, zon_m=1, raam=0.9, deur=0.9), glow=(0.95, 0.96, 1.0),
+                   k=0.04, kfill=(0.28, 0.28, 0.27), wfill=(0.31, 0.29, 0.26)),
+    "avond": dict(sun=(-0.80, 0.50, -0.33), sunc=(3.6, 1.9, 0.70), sky=(0.78, 0.6396, 0.4836), amb=(0.19, 0.14, 0.18), beam=(0.13, 0.091, 0.0442),
+                  win=((1.0, 0.62, 0.26), (1.0, 0.88, 0.56), (0.80, 0.40, 0.22), 1.0), w=dict(lamp=1, zon=1, raam=1, deur=1), glow=None,
+                  k=0.20, kfill=(0.26, 0.21, 0.17), wfill=(0.30, 0.25, 0.20)),
+    "nacht": dict(sun=None, sunc=None, sky=(0.41, 0.36, 0.29), amb=(0.10, 0.085, 0.13), beam=None,
+                  win=((0.10, 0.11, 0.22), (0.05, 0.06, 0.16), (0.03, 0.03, 0.07), 0.45), w=dict(lamp=1.15, zaal=1, raam=0.12, deur=0.12), glow=(0.35, 0.45, 0.9),
+                  k=0.0, kfill=(0.17, 0.14, 0.13), wfill=(0.27, 0.22, 0.18)),
+    "grijs": dict(sun=None, sunc=None, sky=(0.74, 0.75, 0.76), amb=(0.18, 0.18, 0.20), beam=None,
+                  win=((0.80, 0.82, 0.84), (0.90, 0.91, 0.92), (0.50, 0.50, 0.53), 0.85), w=dict(lamp=1, zaal=0.35, raam=0.8, deur=0.8), glow=(0.85, 0.88, 0.93),
+                  k=0.0, kfill=(0.25, 0.25, 0.25), wfill=(0.30, 0.27, 0.24)),
+}
+# position, colour, strength, reach, group. lamp: the shop's own lights. zon*: sunlight thrown back by the floor.
+# raam, deur: the glow of the window and the door. zaal: the ceiling lights over the customers, on when it is dark outside.
+LAMPS = [((-3.0, 2.55, 6.1), (1.0, 0.82, 0.5), 0.55, 1.3, "lamp"), ((-1.0, 2.55, 6.1), (1.0, 0.82, 0.5), 0.55, 1.3, "lamp"),
+         ((1.1, 2.55, 6.1), (1.0, 0.82, 0.5), 0.55, 1.3, "lamp"), ((3.1, 2.55, 6.1), (1.0, 0.82, 0.5), 0.55, 1.3, "lamp"),
+         ((-2.1, 1.62, 6.05), (1.0, 0.92, 0.75), 1.0, 0.8, "lamp"), ((-0.3, 1.42, 6.12), (1.0, 0.45, 0.12), 1.7, 0.6, "lamp"),
+         ((-2.65, 1.5, 3.3), (1.0, 0.86, 0.6), 1.2, 0.45, "lamp"), ((3.55, 1.0, 2.55), (0.35, 0.85, 0.95), 0.9, 1.0, "lamp"),
+         ((-2.0, 0.35, 2.3), (1.0, 0.6, 0.3), 0.45, 1.6, "zon"), ((3.6, 1.2, 1.7), (1.0, 0.72, 0.40), 0.85, 1.3, "deur"),
+         ((-3.5, 1.7, 1.8), (1.0, 0.70, 0.36), 0.95, 1.5, "raam"), ((0.0, 2.2, 4.9), (1.0, 0.88, 0.70), 1.0, 2.4, "lamp"), ((-2.6, 2.0, 5.0), (1.0, 0.88, 0.70), 0.5, 1.6, "lamp"), ((2.2, 2.0, 5.0), (1.0, 0.88, 0.70), 0.5, 1.6, "lamp"),
+         ((1.6, 0.35, 2.5), (1.0, 0.86, 0.66), 0.40, 1.6, "zon_o"), ((-3.0, 0.45, 2.3), (1.0, 0.96, 0.86), 0.36, 1.4, "zon_m"),
+         ((-2.2, 3.0, 1.5), (1.0, 0.90, 0.72), 1.5, 2.3, "zaal"), ((0.6, 3.0, 1.5), (1.0, 0.90, 0.72), 1.5, 2.3, "zaal"), ((2.9, 3.0, 1.5), (1.0, 0.90, 0.72), 1.5, 2.3, "zaal")]
+def lampen(naam):
+    """The lamps that burn in one light: (position, colour, strength, reach)."""
+    L = LICHT[naam]; out = []
+    for pos, c, inten, rad, grp in LAMPS:
+        wgt = L["w"].get(grp, 0)
+        if wgt: out.append((pos, L["glow"] if grp in ("raam", "deur") and L["glow"] else c, inten * wgt, rad))
+    return out
+POINTS = lampen("avond")
+bayer = (np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) / 16.0 - 0.47)
+
 Pf = P[hitm]; Nf = bn[hitm]
 SUNC = [p for p in prims if p["m"]["shadow"] and not p["m"]["glass"]]
 SKYC = [p for p in SUNC if not p["m"]["sunonly"]]
@@ -811,107 +855,120 @@ def occluded(Pp, Np, d, casters):
         occ[idx[np.isfinite(t)]] = True
     return occ
 
-light = np.tile(A(0.19, 0.14, 0.18), (len(Pf), 1))
-SKY = A(1.0, 0.82, 0.62) * 0.78
+# how much of the sky every point sees: the same in every light
 dirs = [(A(0, 1, 0), 0.30)]
 for k in range(6):
     ph = math.radians(20 + 60 * k); el = math.radians(52)
     dirs.append((A(math.cos(el) * math.cos(ph), math.sin(el), math.cos(el) * math.sin(ph)), 0.14))
+SKYV = []
 for d, wgt in dirs:
     nd = Nf @ d; m = nd > 0.01
     idx = np.nonzero(m)[0]
     occ = occluded(Pf[idx], Nf[idx], d, SKYC)
     lit = idx[~occ]
-    light[lit] += SKY * (wgt * nd[lit] * 1.6)[:, None]
-SUN = A(-0.80, 0.50, -0.33); SUN /= np.linalg.norm(SUN)
-nd = Nf @ SUN; idx = np.nonzero(nd > 0.01)[0]
-occ = occluded(Pf[idx], Nf[idx], SUN, SUNC)
-lit = idx[~occ]
-sunmask = np.zeros(len(Pf)); sunmask[lit] = nd[lit]
-light += A(3.6, 1.9, 0.70) * sunmask[:, None]
-print("shadows", round(time.time() - t0, 1), "s")
+    SKYV.append((lit, wgt * nd[lit] * 1.6))
+print("sky", round(time.time() - t0, 1), "s")
 
-POINTS = [((-3.0, 2.55, 6.1), (1.0, 0.82, 0.5), 0.55, 1.3), ((-1.0, 2.55, 6.1), (1.0, 0.82, 0.5), 0.55, 1.3),
-          ((1.1, 2.55, 6.1), (1.0, 0.82, 0.5), 0.55, 1.3), ((3.1, 2.55, 6.1), (1.0, 0.82, 0.5), 0.55, 1.3),
-          ((-2.1, 1.62, 6.05), (1.0, 0.92, 0.75), 1.0, 0.8), ((-0.3, 1.42, 6.12), (1.0, 0.45, 0.12), 1.7, 0.6),
-          ((-2.65, 1.5, 3.3), (1.0, 0.86, 0.6), 1.2, 0.45), ((3.55, 1.0, 2.55), (0.35, 0.85, 0.95), 0.9, 1.0),
-          ((-2.0, 0.35, 2.3), (1.0, 0.6, 0.3), 0.45, 1.6), ((3.6, 1.2, 1.7), (1.0, 0.72, 0.40), 0.85, 1.3),
-          ((-3.5, 1.7, 1.8), (1.0, 0.70, 0.36), 0.95, 1.5), ((0.0, 2.2, 4.9), (1.0, 0.88, 0.70), 1.0, 2.4), ((-2.6, 2.0, 5.0), (1.0, 0.88, 0.70), 0.5, 1.6), ((2.2, 2.0, 5.0), (1.0, 0.88, 0.70), 0.5, 1.6)]
-for pos, c, inten, rad in POINTS:
-    v = A(*pos) - Pf; dist = np.linalg.norm(v, axis=1)
-    nl = np.clip((Nf * v).sum(1) / np.maximum(dist, 1e-6), 0, 1)
-    light += A(*c) * (inten * (0.25 + 0.75 * nl) / (1 + (dist / rad) ** 2) ** 2)[:, None]
-
-col = np.zeros((CH, W, 3)); af = alb[hitm]; ef = emi[hitm]
-col[hitm] = af * light * (1 - 0.8 * np.clip(ef, 0, 1))[:, None] + af * ef[:, None]
-emap = np.zeros((CH, W, 3)); emap[hitm] = af * ef[:, None]
-
-# ------------------------------------------------------------------ sun beams (dusty light)
-bayer = (np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) / 16.0 - 0.47)
 dm = np.tile(bayer, (CH // 4 + 1, W // 4 + 1))[:CH, :W]
 NS = 20
 tz0 = (-0.4 - CAM[2]) / Dimg[..., 2]
 tend = np.where(hitm, bt, tz0); tstart = np.minimum(tz0, tend)
-acc = np.zeros((CH, W)); zero = np.zeros((CH * W, 3))
-for si in range(NS):
-    tt = tstart + (tend - tstart) * ((si + dm + 0.47) / NS)
-    Ps = (CAM[None, None, :] + Dimg * tt[..., None]).reshape(-1, 3)
-    acc += (~occluded(Ps, zero, SUN, SUNC)).reshape(CH, W) * (tend - tstart) / NS
-col += acc[..., None] * A(1.0, 0.70, 0.34) * 0.13
-print("beams", round(time.time() - t0, 1), "s")
-
-# ------------------------------------------------------------------ glass overlay
 gt, gid, gn = trace_primary(lambda p: p["m"]["glass"])
 gm = gt < bt
-if gm.any():
-    Pg = CAM + Dimg[gm] * gt[gm][:, None]
-    streak = (((Pg[:, 0] * 1.0 + Pg[:, 1] * 1.6) / 0.42) % 1) < 0.16
-    col[gm] = col[gm] * 0.90 + A(0.05, 0.06, 0.06) + streak[:, None] * 0.13
-
-# ------------------------------------------------------------------ post
-img = 1 - np.exp(-np.clip(col, 0, None) * 1.45)
-# outlines on the far side of depth edges, highlights on top edges
-edge = np.zeros((CH, W), bool)
-for dy, dx in ((0, 1), (1, 0), (0, -1), (-1, 0)):
-    nid = np.roll(bid, (dy, dx), (0, 1)); nt = np.roll(bt, (dy, dx), (0, 1))
-    edge |= (nid != bid) & (bt > nt + 0.03)
-img[edge & (emi < 0.5)] *= 0.70
-below_n = np.roll(bn, -1, 0); below_id = np.roll(bid, -1, 0)
-hl = (below_id == bid) & (bn[..., 1] > 0.9) & (below_n[..., 1] < 0.5)
-img[hl] = np.clip(img[hl] * 1.18 + 0.03, 0, 1)
-# bloom from emissive surfaces
-E = Image.fromarray((np.clip(emap, 0, 1) * 255).astype(np.uint8))
-g1 = np.asarray(E.filter(ImageFilter.GaussianBlur(W / 640 * 3)), np.float64) / 255
-g2 = np.asarray(E.filter(ImageFilter.GaussianBlur(W / 640 * 10)), np.float64) / 255
-glow = 0.45 * g1 + 0.55 * g2
-img = img + glow * (1 - img) * 0.85
-# grade: warm shadows, a little extra saturation
-lum = img.mean(2, keepdims=True)
-img = lum + (img - lum) * 1.22
-
-img = img + ((1 - np.clip(lum, 0, 1)) ** 3) * A(0.06, 0.015, 0.04)
-img = np.clip(img, 0, 1)
-img = np.clip(img * img * (3 - 2 * img) * 0.55 + img * 0.45, 0, 1)
-# ordered dither + palette reduction
-img8 = (np.clip(img + dm[..., None] * 0.035, 0, 1) * 255).astype(np.uint8)
-frame = Image.fromarray(img8[:H]).quantize(colors=96, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-pim = Image.fromarray(img8).quantize(palette=frame, dither=Image.Dither.NONE).convert("RGB")
-pim.paste(frame.convert("RGB"), (0, 0))
-
-S = 1920 // W
-pim.save(OUT + "_1x.png")
-pim.resize((W * S, CH * S), Image.NEAREST).save(OUT + ".png")
-# overlays so characters can be drawn behind the counter / behind the front furniture
-rgba = np.dstack([np.asarray(pim), np.zeros((CH, W), np.uint8)])
+VENSTER = [k for k, p in enumerate(prims) if p["m"]["fn"] is window_fn]
+RAAM = hitm & np.isin(bid, VENSTER)                     # where the glass of the window and the door shows: rain and snow are drawn there
 # front: whole objects standing in front of the customers, never the floor, walls or door mat
 zc = np.array([(p["corn"][:, 2].min() + p["corn"][:, 2].max()) / 2 for p in prims])
 flat = np.array([p["m"]["fn"] in (floor_fn, sidewall_fn, backwall_fn, mat_fn, window_fn) or p["m"] is FR for p in prims])
 front = hitm & ((zc < 2.5) & ~flat)[bid]
-LAYERS = {"counter_overlay": hitm & (P[..., 2] < 3.9), "front_overlay": front}
-for name, mask in LAYERS.items():
-    a = rgba.copy(); a[..., 3] = 255; a[~mask] = 0
-    LAYERS[name] = Image.fromarray(a, "RGBA")
-    LAYERS[name].resize((W * S, CH * S), Image.NEAREST).save(f"{OUT}_{name}.png")
+S = 1920 // W
+
+def verlicht(naam):
+    """The room in one light: the picture, and the two overlays people are drawn behind."""
+    global WIN
+    L = LICHT[naam]; WIN = L["win"]
+    for k in VENSTER:
+        mask = bid == k; alb[mask] = window_fn(P[mask], bn[mask]); emi[mask] = prims[k]["m"]["emit"] * WIN[3]
+    light = np.tile(A(*L["amb"]), (len(Pf), 1))
+    SKY = A(*L["sky"])
+    for lit, v in SKYV: light[lit] += SKY * v[:, None]
+    if L["sun"]:
+        SUN = A(*L["sun"]); SUN /= np.linalg.norm(SUN)
+        nd = Nf @ SUN; idx = np.nonzero(nd > 0.01)[0]
+        occ = occluded(Pf[idx], Nf[idx], SUN, SUNC)
+        lit = idx[~occ]
+        sunmask = np.zeros(len(Pf)); sunmask[lit] = nd[lit]
+        light += A(*L["sunc"]) * sunmask[:, None]
+    for pos, c, inten, rad in lampen(naam):
+        v = A(*pos) - Pf; dist = np.linalg.norm(v, axis=1)
+        nl = np.clip((Nf * v).sum(1) / np.maximum(dist, 1e-6), 0, 1)
+        light += A(*c) * (inten * (0.25 + 0.75 * nl) / (1 + (dist / rad) ** 2) ** 2)[:, None]
+
+    col = np.zeros((CH, W, 3)); af = alb[hitm]; ef = emi[hitm]
+    col[hitm] = af * light * (1 - 0.8 * np.clip(ef, 0, 1))[:, None] + af * ef[:, None]
+    emap = np.zeros((CH, W, 3)); emap[hitm] = af * ef[:, None]
+
+    # sun beams (dusty light)
+    if L["sun"] and L["beam"]:
+        acc = np.zeros((CH, W)); zero = np.zeros((CH * W, 3))
+        for si in range(NS):
+            tt = tstart + (tend - tstart) * ((si + dm + 0.47) / NS)
+            Ps = (CAM[None, None, :] + Dimg * tt[..., None]).reshape(-1, 3)
+            acc += (~occluded(Ps, zero, SUN, SUNC)).reshape(CH, W) * (tend - tstart) / NS
+        col += acc[..., None] * A(*L["beam"])
+
+    # glass overlay
+    if gm.any():
+        Pg = CAM + Dimg[gm] * gt[gm][:, None]
+        streak = (((Pg[:, 0] * 1.0 + Pg[:, 1] * 1.6) / 0.42) % 1) < 0.16
+        col[gm] = col[gm] * 0.90 + A(0.05, 0.06, 0.06) + streak[:, None] * 0.13
+
+    # post
+    img = 1 - np.exp(-np.clip(col, 0, None) * 1.45)
+    # outlines on the far side of depth edges, highlights on top edges
+    edge = np.zeros((CH, W), bool)
+    for dy, dx in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+        nid = np.roll(bid, (dy, dx), (0, 1)); nt = np.roll(bt, (dy, dx), (0, 1))
+        edge |= (nid != bid) & (bt > nt + 0.03)
+    img[edge & (emi < 0.5)] *= 0.70
+    below_n = np.roll(bn, -1, 0); below_id = np.roll(bid, -1, 0)
+    hl = (below_id == bid) & (bn[..., 1] > 0.9) & (below_n[..., 1] < 0.5)
+    img[hl] = np.clip(img[hl] * 1.18 + 0.03, 0, 1)
+    # bloom from emissive surfaces
+    E = Image.fromarray((np.clip(emap, 0, 1) * 255).astype(np.uint8))
+    g1 = np.asarray(E.filter(ImageFilter.GaussianBlur(W / 640 * 3)), np.float64) / 255
+    g2 = np.asarray(E.filter(ImageFilter.GaussianBlur(W / 640 * 10)), np.float64) / 255
+    glow = 0.45 * g1 + 0.55 * g2
+    img = img + glow * (1 - img) * 0.85
+    # grade: warm shadows, a little extra saturation
+    lum = img.mean(2, keepdims=True)
+    img = lum + (img - lum) * 1.22
+
+    img = img + ((1 - np.clip(lum, 0, 1)) ** 3) * A(0.06, 0.015, 0.04)
+    img = np.clip(img, 0, 1)
+    img = np.clip(img * img * (3 - 2 * img) * 0.55 + img * 0.45, 0, 1)
+    # ordered dither + palette reduction
+    img8 = (np.clip(img + dm[..., None] * 0.035, 0, 1) * 255).astype(np.uint8)
+    frame = Image.fromarray(img8[:H]).quantize(colors=96, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    pim = Image.fromarray(img8).quantize(palette=frame, dither=Image.Dither.NONE).convert("RGB")
+    pim.paste(frame.convert("RGB"), (0, 0))
+
+    # overlays so characters can be drawn behind the counter / behind the front furniture
+    rgba = np.dstack([np.asarray(pim), np.zeros((CH, W), np.uint8)])
+    layers = {"counter_overlay": hitm & (P[..., 2] < 3.9), "front_overlay": front}
+    for name, mask in layers.items():
+        a = rgba.copy(); a[..., 3] = 255; a[~mask] = 0
+        layers[name] = Image.fromarray(a, "RGBA")
+    print(naam, round(time.time() - t0, 1), "s")
+    return pim, layers
+
+# LICHTEN: which lights to bake (tools/sprites.py may ask for a few); the evening always, the people take its measure
+LICHTEN = [n for n in LICHT if n in (globals().get("LICHTEN") or LICHT) or n == "avond"]
+KAMER = {n: verlicht(n) for n in LICHTEN}
+pim, LAYERS = KAMER["avond"]
+for n, (im, _) in KAMER.items(): im.save(OUT + ("_1x.png" if n == "avond" else f"_{n}_1x.png"))
+pim.resize((W * S, CH * S), Image.NEAREST).save(OUT + ".png")
+for name, im in LAYERS.items(): im.resize((W * S, CH * S), Image.NEAREST).save(f"{OUT}_{name}.png")
 
 # ------------------------------------------------------------------ anchors (native pixels, from the same proj())
 def at(x, y, z):
@@ -949,7 +1006,8 @@ if __name__ == "__main__" or globals().get("BAKE"):
                 + json.dumps(ANCHORS, separators=(",", ":")) + ";\n")
     # 1:1 art for every scale: Herdr smooths scaled images, so nothing may be scaled on screen
     for k in (2, 3, 4):
-        d = os.path.join(ROOT, "mods", "frituur", "art", f"{k}x"); os.makedirs(d, exist_ok=True)
-        for name, im in [("scene", pim)] + list(LAYERS.items()):
-            im.resize((W * k, CH * k), Image.NEAREST).save(os.path.join(d, name + ".png"), optimize=True)
+        for n, (im0, lay) in KAMER.items():
+            d = os.path.join(ROOT, "mods", "frituur", "art", f"{k}x", n); os.makedirs(d, exist_ok=True)
+            for name, im in [("scene", im0)] + list(lay.items()):
+                im.resize((W * k, CH * k), Image.NEAREST).save(os.path.join(d, name + ".png"), optimize=True)
 print("done", round(time.time() - t0, 1), "s")

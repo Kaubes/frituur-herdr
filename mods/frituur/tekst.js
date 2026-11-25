@@ -10,6 +10,7 @@ export const T = {
   terminalNeer: "Terminal omlaag",
   animAan: "Animaties: aan",
   animUit: "Animaties: uit",
+  zet: { tijd: "Tijd", seizoen: "Seizoen", weer: "Weer" }, // the buttons that set the time of day, season and weather
   zonder: "(nog niks besteld)",
   onbekend: "(bon niet leesbaar)", // no hook: the order is unknown
 };

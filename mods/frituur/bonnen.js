@@ -8,6 +8,7 @@ import { ART, C, FONT, KLEUR, animOn, clip, findNode, hash, toggleAnim } from ".
 import { SPRITES } from "./sprites-data.js";
 import { Staat, opRang } from "./staat.js";
 import { T, WOORD, sinds } from "./tekst.js";
+import { gezet, volgende } from "./weer.js";
 
 const txt = (s, size, color) => div().font_family(FONT).text_size(size).line_height(1.05).text_color(color).child(s);
 
@@ -44,15 +45,17 @@ export default class Bonnen {
             .child(txt(WOORD[fase], 16, roept ? "#ffffff" : kleur)))
           .child(h_flex().gap(2).items_center().children(Array.from({ length: Math.min(3, s.snacks) }, (_, i) => {
             const n = `snack${i % 4}`, d = SPRITES[n];
-            return image(`${ART}/2x/s/${n}.png`).flex_none().w(d[0]).h(d[1]);
+            return image(`${ART}/2x/avond/s/${n}.png`).flex_none().w(d[0]).h(d[1]);
           })).when(s.snacks > 3, (el) => el.child(txt(T.meer(s.snacks - 3), 14, C.inktZacht)))))
         .when(Boolean(s.plek), (el) => el.child(txt(clip(s.plek, 26), 14, C.inktZacht).truncate())));
   }
 
   knop(id, label, actie) {
-    return h_flex().id(id).flex_1().h(28).items_center().justify_center().bg(C.hout).border(1).border_color(C.houtLicht).cursor_pointer()
-      .hover((el) => el.bg(C.houtLicht)).on_click(actie).child(txt(label, 16, C.creme));
+    return h_flex().id(id).flex_1().min_w(0).h(26).items_center().justify_center().bg(C.hout).border(1).border_color(C.houtLicht).cursor_pointer()
+      .hover((el) => el.bg(C.houtLicht)).on_click(actie).child(txt(label, 15, C.creme));
   }
+
+  zet(naam) { return this.knop(`bon-${naam}`, `${T.zet[naam]}: ${gezet(naam)}`, () => volgende(naam)); }
 
   render(_cx) {
     shared("frituur.anim"); // re-render when the switch flips
@@ -66,7 +69,9 @@ export default class Bonnen {
       .child(div().flex_none().h(9).bg(C.staal).border_t(1).border_b(2).border_color(C.staalDonker))
       .child(v_flex().id("bonnen-lijst").flex_1().min_h(0).pt(8).px(10).overflow_y_scroll()
         .children(list.length ? list.map((s) => this.bon(s, now)) : [txt(T.leeg, 18, C.inktZacht).pt(8)]))
-      .child(v_flex().flex_none().p(8).gap(6)
-        .child(h_flex().child(this.knop("bon-anim", animOn() ? T.animAan : T.animUit, () => toggleAnim()))));
+      // animations, and the time of day, season and weather: auto, or set by hand (a click goes to the next)
+      .child(v_flex().flex_none().p(8).gap(4)
+        .child(h_flex().gap(4).child(this.knop("bon-anim", animOn() ? T.animAan : T.animUit, () => toggleAnim())).child(this.zet("tijd")))
+        .child(h_flex().gap(4).child(this.zet("seizoen")).child(this.zet("weer"))));
   }
 }

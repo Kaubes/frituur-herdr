@@ -1,39 +1,46 @@
 #!/usr/bin/env python3
-"""All sprites of the frituur: customers, workers, food and effects.
+"""All art of the frituur: the room, customers, workers, food, decorations and effects, in every light.
 
-The people come from tools/people.py, the food and tools from tools/props.py; both are finished with
-the room's camera, light and 96 colours, so they sit in the room. The effects are pixels set by hand.
-Running this also re-bakes the room (scene.py runs first).
+The room (tools/scene.py) is lit five ways: ochtend, middag, avond, nacht and grijs (an overcast day). The people come
+from tools/people.py, the food, the season's decorations and the weather from tools/props.py; all of them are finished
+with the room's camera, the light of the moment and its 96 colours, so they sit in the room. The effects are pixels
+set by hand.
 
-  python tools/sprites.py            bakes mods/frituur/art/{2,3,4}x/*.png and sprites-data.js
-  python tools/sprites.py sheet.png  also writes a contact sheet
+  python tools/sprites.py                  bakes mods/frituur/art/{2,3,4}x/<light>/ and sprites-data.js (about 3 minutes)
+  python tools/sprites.py sheet.png        also writes a contact sheet (evening)
+  python tools/sprites.py --licht nacht    only some lights, to try something out. Bake everything before installing:
+                                           the sizes in sprites-data.js fit the lights of the last bake only.
 """
-import json, os, sys
+import json, os, shutil, sys
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ART = os.path.join(ROOT, "mods", "frituur", "art")
-SHEET = sys.argv[1] if len(sys.argv) > 1 else None
+args = sys.argv[1:]
+ONLY = args.pop(args.index("--licht") + 1).split(",") if "--licht" in args else None
+if "--licht" in args: args.remove("--licht")
+SHEET = args[0] if args else None
 sys.argv = ["scene.py"]                              # the room first: everything else takes its camera and its colours from it
-G = {"__name__": "scene", "__file__": os.path.join(HERE, "scene.py"), "BAKE": True}
+G = {"__name__": "scene", "__file__": os.path.join(HERE, "scene.py"), "BAKE": True, "LICHTEN": ONLY}
 exec(compile(open(G["__file__"], encoding="utf-8").read(), "scene.py", "exec"), G)
+LICHTEN = G["LICHTEN"]
 
 sys.path.insert(0, HERE)
 import people, props
 
-SPR = {}  # name -> (image, (anchor x, anchor y))
-SPR.update(people.bake())                            # customers k<i>-<pose>, workers w<i>-<pose>
-SPR.update(props.bake())                             # puntzak-*, mand-*, snack*, olie
+SPR = {}  # name -> ({light: image}, (anchor x, anchor y))
+SPR.update(people.bake(LICHTEN))                     # customers k<i>-<pose>, workers w<i>-<pose>
+SPR.update(props.bake(LICHTEN, G))                   # puntzak-*, mand-*, snack*, olie, the season's things, rain and snow
 OUTFITS = people.N
 
-# ------------------------------------------------------------------ effects: hand-set pixels
+# ------------------------------------------------------------------ effects: hand-set pixels, the same in every light
 def pix(name, rows, colors, anchor):
     im = Image.new("RGBA", (max(map(len, rows)), len(rows)), (0, 0, 0, 0))
     for y, r in enumerate(rows):
         for x, c in enumerate(r):
             if c in colors: im.putpixel((x, y), colors[c])
-    SPR[name] = (im, anchor)
+    SPR[name] = ({n: im for n in LICHTEN}, anchor)
 CR = (255, 250, 232, 255)
 pix("stoom", [" ##  ", "#### ", "#####", " ### ", "  #  "], {"#": (255, 248, 232, 150)}, (2, 4))
 pix("rook", ["  ###  ", " ##### ", "#######", "####### ", " #####", "  ###  "], {"#": (46, 38, 40, 215)}, (3, 5))
@@ -41,23 +48,34 @@ pix("bel", [" ## ", "#++#", "#++#", " ## "], {"#": (255, 214, 96, 255), "+": (25
 pix("bel-klein", ["##", "##"], {"#": (255, 230, 140, 255)}, (1, 1))
 pix("rinkel", ["#     #", " #   # ", "       ", "##   ##", "       "], {"#": (255, 236, 130, 255)}, (3, 6))
 pix("vonk", ["  #  ", "  #  ", "#####", "  #  ", "  #  "], {"#": (255, 240, 170, 255)}, (2, 2))
-pix("schaduw", ["   ##############   ", " ################## ", "####################", " ################## ", "   ##############   "], {"#": (30, 10, 10, 90)}, (10, 2))
 
 # ------------------------------------------------------------------ out
-data = {n: [im.width, im.height, an[0], an[1]] for n, (im, an) in sorted(SPR.items())}
+data = {n: [next(iter(ims.values())).width, next(iter(ims.values())).height, an[0], an[1]] for n, (ims, an) in sorted(SPR.items())}
 for k in (2, 3, 4):
-    d = os.path.join(ART, f"{k}x", "s"); os.makedirs(d, exist_ok=True)
-    for f in os.listdir(d): os.remove(os.path.join(d, f))
-    for n, (im, _) in SPR.items(): im.resize((im.width * k, im.height * k), Image.NEAREST).save(os.path.join(d, n + ".png"), optimize=True)
+    base = os.path.join(ART, f"{k}x")
+    for old in os.listdir(base):                     # the layout of before there were lights: art/2x/scene.png, art/2x/s/
+        p = os.path.join(base, old)
+        if os.path.isfile(p): os.remove(p)
+        elif old == "s": shutil.rmtree(p)
+    for l in LICHTEN:
+        d = os.path.join(base, l, "s"); os.makedirs(d, exist_ok=True)
+        for f in os.listdir(d): os.remove(os.path.join(d, f))
+        for n, (ims, _) in SPR.items():
+            im = ims[l]; im.resize((im.width * k, im.height * k), Image.NEAREST).save(os.path.join(d, n + ".png"), optimize=True)
 with open(os.path.join(ROOT, "mods", "frituur", "sprites-data.js"), "w", encoding="utf-8", newline="\n") as f:
-    f.write("// Generated by tools/sprites.py: name -> [width, height, anchor x, anchor y] in native pixels.\n")
-    f.write(f"export const OUTFITS = {OUTFITS};\nexport const SPRITES = " + json.dumps(data, separators=(",", ":")) + ";\n")
-print(len(SPR), "sprites")
+    f.write("// Generated by tools/sprites.py: name -> [width, height, anchor x, anchor y] in native pixels; the same in every light.\n")
+    f.write(f"export const OUTFITS = {OUTFITS};\nexport const LICHTEN = {json.dumps(list(G['LICHT']))};\n")
+    f.write("// What a person does now and then while standing: name of the standing sprite -> the sprites that take its place for a moment.\n")
+    f.write("export const IDLE = " + json.dumps(people.IDLE, separators=(",", ":")) + ";\n")
+    f.write("// The season's things per layer, and the weather on the glass: groups of sprites that are drawn at (0, 0); two in a group take turns.\n")
+    f.write("export const DECOR = " + json.dumps(props.DECOR, separators=(",", ":")) + ";\nexport const WEER = " + json.dumps(props.WEER, separators=(",", ":")) + ";\n")
+    f.write("export const SPRITES = " + json.dumps(data, separators=(",", ":")) + ";\n")
+print(len(SPR), "sprites x", len(LICHTEN), "lights")
 
 if SHEET:
-    sh = Image.new("RGB", (1500, 3200), (233, 196, 127)); x = y = 6; rowh = 0
-    for n, (im, an) in SPR.items():
-        b = im.resize((im.width * 2, im.height * 2), Image.NEAREST)
+    sh = Image.new("RGB", (1500, 4200), (233, 196, 127)); x = y = 6; rowh = 0
+    for n, (ims, an) in SPR.items():
+        im = ims["avond"]; b = im.resize((im.width * 2, im.height * 2), Image.NEAREST)
         if x + b.width > 1490: x = 6; y += rowh + 4; rowh = 0
         sh.paste(b, (x, y), b); x += b.width + 6; rowh = max(rowh, b.height)
-    sh.crop((0, 0, 1500, min(3200, y + rowh + 6))).save(SHEET)
+    sh.crop((0, 0, 1500, min(4200, y + rowh + 6))).save(SHEET)

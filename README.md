@@ -31,7 +31,8 @@ What the two options do, both optional:
 
 Without `--hook` every agent still shows, with Herdr's own four states. The hook only writes small
 files under `~/.local/state/frituur` (ticket number, current activity, the first 40 characters of
-your prompt). The mod runs no programs and uses no network.
+your prompt). The mod runs no programs and uses no network, unless you turn on the real weather
+(see below).
 
 To update: `git pull`, then the same install command. To remove: `python tools/install.py --unhook`,
 then delete `mods/frituur`, `layouts/Frituur.json`, `layouts/Frituur.png` and `themes/Frituur.json`
@@ -70,6 +71,35 @@ jump to that agent. The terminals are in a drawer you pull up over the shop.
 Try it without any agents: add `"demo": true` to the `props` of the `zaak` and `bonnen` blocks in
 `layouts/Frituur.json` in Herdr's folder. `"demo": "rondje"` walks through every state.
 
+## Time of day, season and weather
+
+The shop follows your clock and calendar.
+
+![A spring morning, summer rain, an autumn evening and a winter night with snow](moods.png)
+
+- **Time of day:** morning sun through the door, bright noon, the low orange evening sun, and night
+  with dark windows and only the lamps. Sunrise and sunset move with the month, as in Belgium.
+- **Season:** tulips in spring, a fan in summer, pumpkins and blown-in leaves in autumn, a Christmas
+  tree and fairy lights in winter.
+- **Weather:** clear, clouds, rain or snow. Clouds turn the daylight grey; rain and snow also show on
+  the glass, with an umbrella stand or swept-up snow by the door. The weather is made up from the
+  date (the same all day for a few hours at a time), so no network is needed.
+- **People** blink, look up at the menu, take a bite, wipe the counter. Nothing of this uses a timer.
+
+To set any of the three by hand, click the buttons under the order rail: **Tijd**, **Seizoen**,
+**Weer**. Each click goes to the next choice, and `auto` follows the clock again.
+
+| Setting | Choices | Command (bind it in `keys.json`, or `herdr-app do ...`) |
+|---|---|---|
+| Tijd | `auto`, `ochtend`, `middag`, `avond`, `nacht` | `frituur.tijd` |
+| Seizoen | `auto`, `lente`, `zomer`, `herfst`, `winter` | `frituur.seizoen` |
+| Weer | `auto`, `helder`, `bewolkt`, `regen`, `sneeuw` | `frituur.weer` |
+
+To fix one for good, put it in the `props` of the `zaak` block in `layouts/Frituur.json`, for example
+`"tijd": "nacht"`. For the real weather, add `"plaats": [50.85, 4.35]` (latitude, longitude) there:
+the shop then asks open-meteo.com twice an hour. This is off unless you add it, and it is the only
+time the mod uses the network.
+
 ## Changing it
 
 Edit here, run `python tools/install.py`, and Herdr reloads. `herdr-app check mods/frituur` reports
@@ -80,8 +110,8 @@ mistakes.
 | `mods/frituur/*.js` | The mod: shop, order rail, tab bar, session state, every text (`tekst.js`) |
 | `layouts/`, `themes/` | The window and its colours |
 | `integrations/claude-code/` | The Claude Code hook |
-| `tools/scene.py`, `people.py`, `props.py` | The room, the people, the food. Everything is drawn by script. |
-| `tools/sprites.py` | Bakes all art into `mods/frituur/art` (about a minute; needs `numpy` and `Pillow`) |
+| `tools/scene.py`, `people.py`, `props.py` | The room, the people, the food and decorations. Everything is drawn by script. |
+| `tools/sprites.py` | Bakes all art into `mods/frituur/art`, once per light (about 6 minutes; needs `numpy` and `Pillow`) |
 | `RECIPE.md` | The brief another agent can rebuild this layout from |
 
 ## Credits

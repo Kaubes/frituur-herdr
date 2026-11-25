@@ -25,7 +25,7 @@ def _scene():
     """Camera, sun, lamps and dither matrix straight from scene.py, without rendering the room."""
     path = os.path.join(HERE, "scene.py")
     want = {"W", "H", "CH", "EPS", "A", "PITCH", "DIST", "TGT", "fwd", "CAM", "right", "up", "TANV", "TANH", "proj",
-            "SUN", "SKY", "POINTS", "bayer", "SLOT_X", "SLOT_Z"}
+            "LICHT", "LAMPS", "lampen", "bayer", "SLOT_X", "SLOT_Z"}
     body = []
     for node in ast.parse(open(path, encoding="utf-8").read()).body:
         names = set()
@@ -369,7 +369,7 @@ class Doll:
         """Eyes, brows and mouth: the few pixels that make a face. They only show where the head is turned to us."""
         a, b, c = s.B.hr; hf = s.r.head; g = ("head",)
         for o in (-1, 1):
-            s.dot(hf.pt(o * a * 0.42, b * 0.04, c * 0.90), eye, grp=g, tol=0.022)
+            s.dot(hf.pt(o * a * 0.42, b * 0.04, c * 0.90), -1 if getattr(s, "blink", False) else eye, grp=g, tol=0.022)
             if brow is not None: s.dot(hf.pt(o * a * 0.42, b * 0.26, c * 0.90), brow, grp=g, tol=0.022)
             if blush is not None: s.dot(hf.pt(o * a * 0.60, -b * 0.26, c * 0.76), blush, grp=g, tol=0.022)
         offs = ((-1, 0), (0, 0), (-1, 1), (0, 1)) if open_ else ((-1, 0), (0, 0), (-2, -1), (1, -1)) if smile else ((0, 0),)
@@ -451,7 +451,7 @@ def debug_shade(model, anchor):
         n = np.stack([f(Pk + V(e, 0, 0)) - f(Pk - V(e, 0, 0)), f(Pk + V(0, e, 0)) - f(Pk - V(0, e, 0)), f(Pk + V(0, 0, e)) - f(Pk - V(0, 0, e))], 1)
         n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
         c = base_colour(p.mat)
-        l = 0.42 + 0.5 * np.clip(n @ SC.SUN, 0, 1) + 0.18 * np.clip(n[:, 1], 0, 1)
+        l = 0.42 + 0.5 * np.clip(n @ unit(V(-0.80, 0.50, -0.33)), 0, 1) + 0.18 * np.clip(n[:, 1], 0, 1)
         out[q, :3] = np.clip(np.array(c)[None] * l[:, None], 0, 255); out[q, 3] = 255
     names = sorted({str(p.grp) for p in model.parts}); grp = np.array([names.index(str(p.grp)) for p in model.parts] + [-1])[t.ID]
     for dy, dx in ((0, 1), (1, 0), (0, -1), (-1, 0)):
@@ -461,20 +461,27 @@ def debug_shade(model, anchor):
 
 
 # ------------------------------------------------------------------ finishing a picture the way the room is finished
-def _palette():
-    im = np.asarray(Image.open(os.path.join(ROOT, "assets", "frituur_scene_1x.png")).convert("RGB"))[:SC.H]
+def _palette(naam="avond"):
+    """The 96 colours of the room in one of its lights."""
+    f = "frituur_scene_1x.png" if naam == "avond" else f"frituur_scene_{naam}_1x.png"
+    im = np.asarray(Image.open(os.path.join(ROOT, "assets", f)).convert("RGB"))[:SC.H]
     return np.unique(im.reshape(-1, 3), axis=0)
-PAL = _palette(); PALF = PAL.astype(np.float64)        # the room's 96 colours
 TOP = 0.945                                            # no pixel of a person is brighter: bell, steam and bubbles stay on top
-USE = np.nonzero(PAL.max(1) / 255.0 <= TOP)[0]
 
-AMB = V(0.19, 0.14, 0.18)                              # scene.py: ambient, sky dome, sun colour, exposure, grade
+# scene.py: sky dome, exposure, grade. The rest of the light (sun, sky colour, lamps) comes from scene.LICHT, see use().
 SKYD = [(V(0, 1, 0), 0.30)] + [(V(math.cos(math.radians(52)) * math.cos(math.radians(20 + 60 * k)), math.sin(math.radians(52)),
                                   math.cos(math.radians(52)) * math.sin(math.radians(20 + 60 * k))), 0.14) for k in range(6)]
-SUNCOL = V(3.6, 1.9, 0.70)
-# Customers stand where the low sun reaches some of them and not others, so they get it at part strength,
+# Customers stand where the sun reaches some of them and not others, so they get it at part strength (scene.LICHT "k"),
 # from its true direction; behind the counter there is only lamp light. `fill` is the lit room behind the viewer.
-LIGHT = {"k": dict(sun=0.20, fill=V(0.26, 0.21, 0.17)), "w": dict(sun=0.0, fill=V(0.30, 0.25, 0.20))}
+# HUE: the way shade and light lean in each light. In the evening shade leans to maroon and light to warm cream.
+HUE = {"ochtend": ((-0.06, -0.11, -0.03), (0.06, 0.03, -0.07)), "middag": ((-0.04, -0.07, -0.01), (0.03, 0.02, -0.03)),
+       "avond": ((-0.10, -0.20, -0.08), (0.10, 0.02, -0.16)), "nacht": ((-0.10, -0.17, -0.03), (0.08, 0.02, -0.12)),
+       "grijs": ((-0.04, -0.06, 0.0), (0.02, 0.02, -0.01))}
+def _licht(naam):
+    L = SC.LICHT[naam]
+    return types.SimpleNamespace(naam=naam, amb=V(L["amb"]), sky=V(L["sky"]), sun=unit(V(L["sun"])) if L["sun"] else None,
+                                 sunc=V(L["sunc"]) if L["sun"] else V(0, 0, 0), points=SC.lampen(naam), hue=(V(HUE[naam][0]), V(HUE[naam][1])),
+                                 w={"k": dict(sun=L["k"] if L["sun"] else 0.0, fill=V(L["kfill"])), "w": dict(sun=0.0, fill=V(L["wfill"]))})
 
 def expose(col): return 1 - np.exp(-np.clip(col, 0, None) * 1.45)
 def grade(img):
@@ -497,9 +504,9 @@ LUM = V(0.30, 0.59, 0.11)
 LREFS = 0.80                                           # the amount of light under which a material shows its base colour
 NS, LS0, LS1 = 96, math.log(0.16), math.log(2.6)       # light levels a ramp is tabulated for
 def _hue(s_):
-    """Shade leans to the room's maroon, light to its warm cream: the hue shift every surface in the room shows."""
+    """Shade and light each lean to a colour of their own: the hue shift every surface in the room shows."""
     t = np.clip(np.log(s_) / math.log(2.6), -1, 1)
-    return np.where((t < 0)[:, None], 1 + np.outer(-t, V(-0.10, -0.20, -0.08)), 1 + np.outer(t, V(0.10, 0.02, -0.16)))
+    return np.where((t < 0)[:, None], 1 + np.outer(-t, LT.hue[0]), 1 + np.outer(t, LT.hue[1]))
 def _near(rgb, idx):
     """Nearest room colour, judged on hue before brightness so a ramp stays in its colour family."""
     def yc(c): y = c @ LUM; return np.stack([y * 0.6, (c[..., 0] - y) * 2.2, (c[..., 2] - y) * 2.2], -1)
@@ -507,13 +514,14 @@ def _near(rgb, idx):
 FAMILY = {SAGE: [(30, 19, 20), (49, 36, 36), (64, 115, 59), (140, 170, 125)], GREEN: [(30, 19, 20), (49, 36, 36), (64, 115, 59), (140, 170, 125)]}
 RIM = {SAGE: (222, 227, 218)}
 _RAMP = {}
-def ramp(mat):
+def ramp(mat, where="k"):
     """A material's ramp: the room colour it takes at each light level, from deep shade to full light."""
+    key = mat; mat = (mat, where)
     if mat not in _RAMP:
-        a = albedo(base_colour(mat)); s_ = np.exp(np.linspace(LS0, LS1, NS))
-        want = grade(expose(a * LREF * s_[:, None] * _hue(s_)))
-        if base_colour(mat) in FAMILY:
-            fam = np.array([int(((PALF - V(c)) ** 2).sum(1).argmin()) for c in FAMILY[base_colour(mat)]])
+        a = albedo(base_colour(key)); s_ = np.exp(np.linspace(LS0, LS1, NS))
+        want = grade(expose(a * LCOL[where] * s_[:, None] * _hue(s_)))
+        if base_colour(key) in FAMILY:
+            fam = np.array(sorted({int(((PALF - V(c)) ** 2).sum(1).argmin()) for c in _relit(FAMILY[base_colour(key)], where)}, key=lambda i: PALF[i] @ LUM))
             tb = fam[np.abs((want * 255.0) @ LUM - (PALF[fam] @ LUM)[:, None]).argmin(0)]
         else: tb = USE[_near(want, USE)]
         for i in range(1, NS):                              # never darker as the light grows
@@ -533,15 +541,31 @@ def union(parts, P):
         if len(i): d[i] = np.minimum(d[i], p.sdf.f(P[i]))
     return d
 
-def lighting(P, N, ao, sunvis, where):
-    lt = LIGHT[where]; L = np.outer(0.45 + 0.55 * ao, AMB)
-    for dv, wgt in SKYD: L += SC.SKY * (wgt * 1.6 * np.clip(N @ dv, 0, 1) * ao)[:, None]
-    if lt["sun"]: L += SUNCOL * lt["sun"] * (np.clip(N @ SC.SUN, 0, 1) * sunvis)[:, None]
+def lighting(P, N, ao, sunvis, where, light=None):
+    T_ = light or LT; lt = T_.w[where]; L = np.outer(0.45 + 0.55 * ao, T_.amb)
+    for dv, wgt in SKYD: L += T_.sky * (wgt * 1.6 * np.clip(N @ dv, 0, 1) * ao)[:, None]
+    if lt["sun"]: L += T_.sunc * lt["sun"] * (np.clip(N @ T_.sun, 0, 1) * sunvis)[:, None]
     L += lt["fill"] * (np.clip(-N[:, 2] * 0.8 + 0.2, 0, 1) * (0.5 + 0.5 * ao))[:, None]
-    for pos, c, inten, rad in SC.POINTS:
+    for pos, c, inten, rad in T_.points:
         v = V(pos) - P; dist = np.linalg.norm(v, axis=1); nl = np.clip((N * v).sum(1) / np.maximum(dist, 1e-6), 0, 1)
         L += V(c) * (inten * (0.25 + 0.75 * nl) / (1 + (dist / rad) ** 2) ** 2)[:, None]
     return L
+
+_REPN = np.array([unit(V(n)) for n in ((0, 0.3, -1), (0, 1, -0.2), (-0.7, 0.2, -0.7), (0.7, 0.2, -0.7))])
+def _rep(light, where):
+    """The colour of the light that falls on somebody standing at the counter (k) or behind it (w)."""
+    P = np.tile(V(-0.3, 1.25, Z_WORKER if where == "w" else Z_CUSTOMER), (len(_REPN), 1))
+    c = lighting(P, _REPN, np.ones(len(_REPN)), np.full(len(_REPN), 0.5), where, light).mean(0); return c / (c @ LUM)
+def _relit(cols, where):
+    """Colours picked from the evening room, as the present light shows them."""
+    return [np.clip(grade(expose(albedo(c) * LCOL[where])) * 255.0, 0, 255) for c in cols] if LT.naam != "avond" else [V(c) for c in cols]
+
+def use(naam):
+    """Light everything that is drawn from here on with one of the room's lights: its lamps, its sun, its 96 colours."""
+    global LT, PAL, PALF, USE, LCOL
+    LT = _licht(naam); PAL = _palette(naam); PALF = PAL.astype(np.float64); USE = np.nonzero(PAL.max(1) / 255.0 <= TOP)[0]
+    ev = _licht("avond"); LCOL = {w: LREF * (_rep(LT, w) / _rep(ev, w)) for w in "kw"}; _RAMP.clear()
+use("avond")
 
 SHADOW = (30, 9, 9)
 DITHER = 0.30                                          # share of the way between two ramp steps that is dithered (4x4 Bayer, as the room)
@@ -549,25 +573,29 @@ SOFT = 0.62
 def shade(model, anchor, where="k", ground=0.0, reach=0.50):
     """One person or thing, finished: lit for the spot, the room's exposure and grade, its edge rules, its dither and its
     96 colours. `ground`: the height of the surface it stands on (None: it hangs, no shadow); `reach`: how far its shadow runs."""
-    parts = model.parts; t = trace(parts, anchor); h, w = t.ID.shape; hit = t.ID >= 0
-    P = CAM + t.D * np.where(hit, t.T, 0)[..., None]; N = np.zeros((h, w, 3)); alb = np.zeros((h, w, 3)); e = 2.5e-3
-    mats = sorted({p.mat for p in parts}); grps = sorted({str(p.grp) for p in parts})
-    MI = np.full((h, w), -1); G = np.full((h, w), -1)
-    for k, p in enumerate(parts):
-        q = t.ID == k
-        if not q.any(): continue
-        Pk = P[q]; f = p.sdf.f
-        n = np.stack([f(Pk + V(e, 0, 0)) - f(Pk - V(e, 0, 0)), f(Pk + V(0, e, 0)) - f(Pk - V(0, e, 0)), f(Pk + V(0, 0, e)) - f(Pk - V(0, 0, e))], 1)
-        N[q] = n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
-        alb[q] = albedo(base_colour(p.mat)); MI[q] = mats.index(p.mat); G[q] = grps.index(str(p.grp))
-    Pf, Nf = P[hit], N[hit]
-    ao = np.ones(len(Pf))                                  # soft shade where forms come close: under the chin, arm against body
-    for hh, wgt in ((0.03, 0.40), (0.07, 0.35), (0.15, 0.25)): ao -= wgt * np.clip(1 - union(parts, Pf + Nf * hh) / hh, 0, 1)
-    ao = np.clip(ao, 0, 1); sv = np.ones(len(Pf))
-    if LIGHT[where]["sun"]:                                # the figure's own shadow from the sun
-        i = np.nonzero(Nf @ SC.SUN > 0)[0]; O = Pf[i] + Nf[i] * 0.014; tt = np.full(len(i), 0.01); vis = np.ones(len(i), bool)
+    parts = model.parts; g = getattr(model, "_geo", None)
+    if g is None:                                          # the shape does not change with the light: traced once
+        t = trace(parts, anchor); h, w = t.ID.shape; hit = t.ID >= 0
+        P = CAM + t.D * np.where(hit, t.T, 0)[..., None]; N = np.zeros((h, w, 3)); e = 2.5e-3
+        mats = sorted({p.mat for p in parts}); grps = sorted({str(p.grp) for p in parts})
+        MI = np.full((h, w), -1); G = np.full((h, w), -1)
+        for k, p in enumerate(parts):
+            q = t.ID == k
+            if not q.any(): continue
+            Pk = P[q]; f = p.sdf.f
+            n = np.stack([f(Pk + V(e, 0, 0)) - f(Pk - V(e, 0, 0)), f(Pk + V(0, e, 0)) - f(Pk - V(0, e, 0)), f(Pk + V(0, 0, e)) - f(Pk - V(0, 0, e))], 1)
+            N[q] = n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
+            MI[q] = mats.index(p.mat); G[q] = grps.index(str(p.grp))
+        Pf, Nf = P[hit], N[hit]
+        ao = np.ones(len(Pf))                              # soft shade where forms come close: under the chin, arm against body
+        for hh, wgt in ((0.03, 0.40), (0.07, 0.35), (0.15, 0.25)): ao -= wgt * np.clip(1 - union(parts, Pf + Nf * hh) / hh, 0, 1)
+        ao = np.clip(ao, 0, 1)
+        g = model._geo = (t, h, w, hit, P, N, mats, grps, MI, G, Pf, Nf, ao)
+    t, h, w, hit, P, N, mats, grps, MI, G, Pf, Nf, ao = g; sv = np.ones(len(Pf))
+    if LT.w[where]["sun"]:                                 # the figure's own shadow from the sun
+        i = np.nonzero(Nf @ LT.sun > 0)[0]; O = Pf[i] + Nf[i] * 0.014; tt = np.full(len(i), 0.01); vis = np.ones(len(i), bool)
         for _ in range(20):
-            dd = union(parts, O + SC.SUN * tt[:, None]); vis &= dd > 0.003; tt += np.clip(dd, 0.012, 0.25)
+            dd = union(parts, O + LT.sun * tt[:, None]); vis &= dd > 0.003; tt += np.clip(dd, 0.012, 0.25)
         sv[:] = 0; sv[i] = vis
     sval = np.zeros((h, w)); sval[hit] = lighting(Pf, Nf, ao, sv, where) @ LUM / LREFS      # light per pixel, 1 = base colour
     # the room's edge rules: the far side of a step in depth is 30% darker, an edge that faces up gets a thin highlight
@@ -587,12 +615,12 @@ def shade(model, anchor, where="k", ground=0.0, reach=0.50):
     for k, m in enumerate(mats):
         q = MI == k
         if not q.any(): continue
-        cols, _, mid = ramp(m); uq = u[q]
+        cols, _, mid = ramp(m, where); uq = u[q]
         if len(cols) == 1: PI[q] = cols[0]; continue
         i = np.clip(np.searchsorted(mid, uq) - 1, 0, len(mid) - 2); f = (uq - mid[i]) / (mid[i + 1] - mid[i])
         PI[q] = cols[i + (np.clip((f - 0.5) / DITHER + 0.5, 0, 1) > thr[q])]     # ordered dither, only where two steps meet
         if base_colour(m) in RIM:
-            e_ = q & top & (sval > 1.0) & (PI == cols[-1]); PI[e_] = int(((PALF - V(RIM[base_colour(m)])) ** 2).sum(1).argmin())
+            e_ = q & top & (sval > 1.0) & (PI == cols[-1]); PI[e_] = int(((PALF - _relit([RIM[base_colour(m)]], where)[0]) ** 2).sum(1).argmin())
     # what is placed by hand
     D = np.linalg.norm
     def at_px(Pw, tol):
@@ -601,8 +629,8 @@ def shade(model, anchor, where="k", ground=0.0, reach=0.50):
     def put(x, y, v, grp):
         if not (0 <= x < w and 0 <= y < h) or not hit[y, x] or (grp is not None and grps[G[y, x]] not in grp): return
         if isinstance(v, int):
-            r_ = ramp(mats[MI[y, x]])[1]; j = r_.index(PI[y, x]) if PI[y, x] in r_ else len(r_) - 1; PI[y, x] = r_[min(max(j + v, 0), len(r_) - 1)]
-        else: PI[y, x] = int(((PALF - V(v)) ** 2).sum(1).argmin())
+            r_ = ramp(mats[MI[y, x]], where)[1]; j = r_.index(PI[y, x]) if PI[y, x] in r_ else len(r_) - 1; PI[y, x] = r_[min(max(j + v, 0), len(r_) - 1)]
+        else: PI[y, x] = int(((PALF - _relit([v], where)[0]) ** 2).sum(1).argmin())
     wires = []
     for kind, a, b, v, grp, tol in model.marks:
         if kind == "dot":
@@ -618,13 +646,14 @@ def shade(model, anchor, where="k", ground=0.0, reach=0.50):
                     if not hit[y, x] or D(Pw - CAM) <= t.T[y, x] + tol: wires.append((x, y, v))
                 elif D(Pw - CAM) <= t.T[y, x] + tol: put(x, y, v, grp)
     out = np.zeros((h, w, 4), np.uint8); out[hit, :3] = PAL[PI[hit]]; out[hit, 3] = 255
-    for x, y, v in wires: out[y, x, :3] = PAL[int(((PALF - V(v)) ** 2).sum(1).argmin())]; out[y, x, 3] = 255
+    for x, y, v in wires: out[y, x, :3] = PAL[int(((PALF - _relit([v], where)[0]) ** 2).sum(1).argmin())]; out[y, x, 3] = 255
     # the contact shadow: where the figure hides the floor from the sun, close to the feet, and a darker core right under them
     if ground is None: return Image.fromarray(out, "RGBA"), t
     solid = out[..., 3] > 0; ty = (ground - CAM[1]) / t.D[..., 1]; F = CAM + t.D * ty[..., None]
     rows = slice(max(0, t.ay - 16), h); q = np.zeros((h, w), bool); q[rows] = ~solid[rows]
-    Fq = F[q] + V(0, 0.004, 0); sd = -SC.SUN * 0 + SC.SUN; tt = np.full(len(Fq), 0.02); occ = np.zeros(len(Fq)); live = np.ones(len(Fq), bool)
-    REACH = reach
+    Fq = F[q] + V(0, 0.004, 0); tt = np.full(len(Fq), 0.02); occ = np.zeros(len(Fq)); live = np.ones(len(Fq), bool)
+    sd = LT.sun if LT.sun is not None else V(0, 1, 0)      # without a sun the lamps overhead leave a small shadow straight below
+    REACH = reach if LT.sun is not None else reach * 0.55
     for _ in range(22):
         dd = union(parts, Fq + sd * tt[:, None]); hitn = live & (dd < 0.004)
         occ[hitn] = 1 - tt[hitn] / REACH; live &= ~hitn & (tt < REACH); tt += np.clip(dd, 0.012, 0.2)
@@ -635,10 +664,19 @@ def shade(model, anchor, where="k", ground=0.0, reach=0.50):
     return Image.fromarray(out, "RGBA"), t
 
 def finish(model, anchor, where, ground=0.0, reach=0.50):
-    """A finished sprite, cropped, and the pixel of its anchor in it."""
+    """A finished sprite in the present light, cropped, and the pixel of its anchor in it."""
     im, t = shade(model, anchor, where, ground, reach)
     a = np.asarray(im)[..., 3] > 0; ys, xs = np.nonzero(a); b = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1)
     return im.crop(b), (int(t.ax - b[0]), int(t.ay - b[1]))
+
+def finish_all(model, anchor, where, ground=0.0, reach=0.50, lichten=("avond",)):
+    """One sprite in several lights: ({light: image}, anchor). Every image is cut to the same box, so one size fits all."""
+    ims = {}; box_ = None
+    for n in lichten:
+        use(n); im, t = shade(model, anchor, where, ground, reach); ims[n] = im
+        ys, xs = np.nonzero(np.asarray(im)[..., 3] > 0); b = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1)
+        box_ = b if box_ is None else (min(box_[0], b[0]), min(box_[1], b[1]), max(box_[2], b[2]), max(box_[3], b[3]))
+    return {n: im.crop(box_) for n, im in ims.items()}, (int(t.ax - box_[0]), int(t.ay - box_[1]))
 
 def sprite(ch, pose):
     """One person in one pose; the anchor is the floor point between the feet."""
@@ -674,6 +712,10 @@ def walk(B, **kw):
     b = dict(yaw=-90, lean=2, stance=0.13 * B.k, footL=(0, -0.015, 0, 5, 0), footR=(0, 0.045, 0, 5, 0), armL=swing(4), armR=swing(-5))
     a.update(kw); b.update(kw); return dict(stap0=a, stap1=b)
 
+# Idle poses: what somebody does for a moment while standing (sta) or eating (eet), and the pose it grows out of.
+EXTRA = ("kwispel", "zak", "veeg0", "veeg1", "schrijf")
+BASE = dict({n: "sta" for n in EXTRA}, kijk="sta", hap="eet")
+
 def person(key, title, B, side=1, walk_=None, **poses):
     """Registers a character. `side`: the way a customer tends to turn (+1 right, -1 left); the hand on that side is
     the one that leans on the counter and holds the cone. Poses not given are filled in from the common ones."""
@@ -685,6 +727,11 @@ def person(key, title, B, side=1, walk_=None, **poses):
             gl.update(P.get("leun", {})); P["leun"] = gl
             ge = dict(yaw=side * 64, hyaw=side * 16, hpitch=8, stance=0.18, cone=side, **{near: chest(side * 0.075, -0.25, 0.25, (side * 0.6, -1, -0.4))})
             ge.update(P.get("eet", {})); P["eet"] = ge
+            # now and then: a look up at the menu boards, and a bite (the cone goes up, the head down)
+            kj = dict(P["sta"], hyaw=-0.5 * P["sta"].get("hyaw", 0) - side * 22, hpitch=-10, hroll=0); kj.update(P.get("kijk", {})); P["kijk"] = kj
+            hp = dict(ge, hpitch=ge.get("hpitch", 8) + 12, **{near: chest(side * 0.055, -0.11, 0.21, (side * 0.6, -1, -0.4))}); hp.update(P.get("hap", {})); P["hap"] = hp
+        for n in EXTRA:                                         # a character's own idle poses: what differs from standing
+            if n in poses: P[n] = dict(P["sta"], **poses[n])
         w = walk(B, **(walk_ or {}))
         for n in ("stap0", "stap1"):
             P.setdefault(n, w[n]); P[n + "-r"] = dict(P[n], yaw=90)
@@ -692,7 +739,9 @@ def person(key, title, B, side=1, walk_=None, **poses):
     return reg
 
 def build(ch, pose="sta"):
+    oog = pose.endswith("-oog"); pose = pose[:-4] if oog else pose          # "-oog": the same pose with the eyes shut
     d = Doll(ch.B, ch.poses[pose], (0, 0, Z_WORKER if ch.key[0] == "w" else Z_CUSTOMER))
+    d.idle = pose if pose in BASE else None; d.blink = oog; pose = BASE.get(pose, pose)   # dressed as for the pose it grows out of
     d.pose = pose; d.walking = pose.startswith("stap"); d.side = ch.side; d.right = pose.endswith("-r"); ch.dress(d)
     if d.r.P.get("cone"): fries(d, d.r.P["cone"])
     return d
@@ -838,6 +887,7 @@ def cyclist(d):
 @person("k4", "kind", anatomy(H=1.13, head=1.20, sh=0.120, waist=0.110, hip=0.122, belly=0.02, bulk=0.95, legs=0.45, depth=0.085), side=-1,
         sta=dict(yaw=-10, lean=6, hyaw=-50, hpitch=-20, stance=0.13, drop=-0.05, footL=(0, 0, 0, 10, 38), footR=(0, 0, 0, 10, 38),
                  armL=stand(-0.26, 1.06, 0.20, (-0.6, -1, -0.3)), armR=chest(0.085, -0.10, 0.10, (0.6, -1, -0.5))),
+        zak=dict(drop=0.0, footL=(0, 0, 0, 10, 0), footR=(0, 0, 0, 10, 0), hpitch=-6, hyaw=-30, armL=stand(-0.24, 1.0, 0.16, (-0.6, -1, -0.3))),
         leun=dict(yaw=-4, lean=14, pz=0.10, hpitch=-26, stance=0.13, drop=-0.05, footL=(0, 0, 0, 10, 38), footR=(0, 0, 0, 10, 38),
                   armL=stand(-0.10, 1.075, 0.42, (-0.8, -0.8, -0.3)), armR=stand(0.10, 1.075, 0.42, (0.8, -0.8, -0.3))),
         eet=dict(hpitch=14, armL=chest(-0.06, -0.14, 0.17, (-0.6, -1, -0.4)), armR=chest(0.02, -0.12, 0.17, (0.7, -1, -0.3))))
@@ -1025,7 +1075,7 @@ def dog(d, x, leash_from):
     if not d.walking:
         D = Fr(S_.pt(x, 0, -0.02), S_.R)
         d.add(at(D, SU(ell((0, 0.105, -0.015), (0.085, 0.10, 0.10)), ell((0, 0.20, 0.045), (0.068, 0.09, 0.065)), 0.03) | ell((-0.07, 0.03, 0.04), (0.03, 0.03, 0.05)) | ell((0.07, 0.03, 0.04), (0.03, 0.03, 0.05))
-                 | cap((-0.028, 0.16, 0.085), (-0.028, 0.012, 0.095), 0.02, 0.018) | cap((0.028, 0.16, 0.085), (0.028, 0.012, 0.095), 0.02, 0.018) | cap((0, 0.05, -0.10), (-0.055 * sg, 0.135, -0.165), 0.02, 0.011)), white, "dog")
+                 | cap((-0.028, 0.16, 0.085), (-0.028, 0.012, 0.095), 0.02, 0.018) | cap((0.028, 0.16, 0.085), (0.028, 0.012, 0.095), 0.02, 0.018) | cap((0, 0.05, -0.10), (-0.055 * sg * (-1.2 if d.idle == "kwispel" else 1), 0.135, -0.165), 0.02, 0.011)), white, "dog")
         hd = (0.012 * sg, 0.318, 0.055); sn = (0.105 * sg, 0.34, 0.065)
         d.add(at(D, ell(hd, (0.058, 0.055, 0.06)) | cap((0.03 * sg, 0.315, 0.06), sn, 0.032, 0.021) | ell((-0.022, 0.372, 0.04), (0.017, 0.034, 0.014)) | ell((0.034, 0.376, 0.04), (0.017, 0.034, 0.014))), white, "doghead")
         neck = D.pt(0.0, 0.262, 0.03); eye = D.pt(0.045 * sg, 0.335, 0.02)
@@ -1043,7 +1093,7 @@ def dog(d, x, leash_from):
 
 def cane_arm(r, B, o): return r.S.pt(0.25, 0.80, 0.07), r.S.vec(0.7, -0.2, -1)
 @person("k11", "opa", anatomy(H=1.64, head=1.18, sh=0.175, waist=0.190, hip=0.180, belly=0.075, bulk=1.05, legs=0.47, depth=0.115), side=-1,
-        sta=dict(yaw=-22, hyaw=-48, hpitch=14, lean=9, fhp=0.035, stance=0.19, armR=cane_arm, armL="hang"),
+        sta=dict(yaw=-22, hyaw=-48, hpitch=14, lean=9, fhp=0.035, stance=0.19, armR=cane_arm, armL="hang"), kwispel={},
         leun=dict(lean=17, fhp=0.03, armR=cane_arm), eet=dict(lean=8, fhp=0.03, armR=cane_arm),
         walk_=dict(lean=9, fhp=0.035, armR=lambda r, B, o: (r.S.pt(0.24, 0.80, 0.16), r.S.vec(0.7, -0.2, -1)), armL=swing(3)))
 def opa(d):
@@ -1146,6 +1196,8 @@ def worker_poses(B, s, basket, pad=None):
 
 @person("w0", "Marleen", anatomy(H=1.60, head=1.20, sh=0.180, waist=0.200, hip=0.210, belly=0.07, bust=0.04, butt=0.03, bulk=1.15, depth=0.12, neck=0.8),
         sta=dict(yaw=180, hyaw=-12, hroll=5, stance=0.22, armL="hip", armR="hip"),
+        veeg0=dict(lean=17, hyaw=4, hpitch=15, hroll=0, armR=stand(0.17, 0.99, 0.40, (0.7, -0.5, -0.3))),
+        veeg1=dict(lean=17, hyaw=-4, hpitch=15, hroll=0, armR=stand(-0.05, 0.99, 0.42, (0.7, -0.5, -0.3))),
         **worker_poses(None, 1, -0.34))
 def marleen(d):
     """Runs the place: small and round, curls and a bun, bib apron, sleeves rolled, tea towel over her shoulder."""
@@ -1174,6 +1226,7 @@ def marleen(d):
 JEF_PAD = chest(-0.10, -0.26, 0.20, (-0.6, -1, -0.3))
 @person("w1", "Jef", anatomy(H=1.80, head=1.08, sh=0.175, waist=0.135, hip=0.150, bulk=0.88, legs=0.50),
         sta=dict(yaw=180, hyaw=14, sway=0.03, hiptilt=-4, stance=0.19, armL=JEF_PAD, armR="hang"),
+        schrijf=dict(hyaw=8, hpitch=17, armR=chest(-0.055, -0.235, 0.225, (0.8, -0.8, -0.2))),
         **dict(worker_poses(None, -1, -0.38), praat=dict(yaw=180, lean=12, hpitch=10, hyaw=6, stance=0.19, armL=JEF_PAD, armR=chest(-0.02, -0.22, 0.25, (0.8, -0.8, -0.2)))))
 def jef(d):
     """Tall and thin, paper cap on his curls, long apron tied at the waist, a pen behind his ear and the order pad in his hand."""
@@ -1197,14 +1250,26 @@ def jef(d):
     for o in LR(): d.stroke(r.pel.pt(o * 0.08, -0.10, zp), r.pel.pt(o * 0.08, -0.20, zp), -1, grp=("apron",))
 
 N = sum(ch.key[0] == "k" for ch in CAST)   # number of customers
-POSES_K = ("sta", "leun", "eet", "stap0", "stap1", "stap0-r", "stap1-r")
-POSES_W = ("sta", "praat", "roept", "bak0", "bak1", "reik", "stap0", "stap1", "stap0-r", "stap1-r")
+POSES_K = ("sta", "leun", "eet", "stap0", "stap1", "stap0-r", "stap1-r", "kijk", "hap")
+POSES_W = ("sta", "praat", "roept", "bak0", "bak1", "reik", "stap0", "stap1", "stap0-r", "stap1-r", "sta-oog", "praat-oog", "roept-oog")
+def poses_of(ch): return (POSES_K if ch.key[0] == "k" else POSES_W) + tuple(n for n in EXTRA if n in ch.poses)
 
-def bake(report=print):
-    """Every sprite of every person: name -> (image, anchor). Called by tools/sprites.py."""
+# Idle life, for the mod: standing sprite -> what takes its place for a moment. Two names in a group alternate.
+IDLE = {}
+for _ch in CAST:
+    _k = _ch.key; _x = [n for n in EXTRA if n in _ch.poses]
+    if _k[0] == "k":
+        IDLE[f"{_k}-sta"] = [[f"{_k}-kijk"]] + [[f"{_k}-{n}"] for n in _x]; IDLE[f"{_k}-eet"] = [[f"{_k}-hap"]]
+    else:
+        IDLE[f"{_k}-sta"] = [[f"{_k}-sta-oog"]] + ([[f"{_k}-veeg0", f"{_k}-veeg1"]] if "veeg0" in _x else []) + [[f"{_k}-{n}"] for n in _x if not n.startswith("veeg")]
+        for _p in ("praat", "roept"): IDLE[f"{_k}-{_p}"] = [[f"{_k}-{_p}-oog"]]
+
+def bake(lichten=("avond",), report=print):
+    """Every sprite of every person, in every light asked for: name -> ({light: image}, anchor). Called by tools/sprites.py."""
     out = {}
     for i, ch in enumerate(CAST):
-        for pose in (POSES_K if ch.key[0] == "k" else POSES_W): out[f"{ch.key}-{pose}"] = sprite(ch, pose)
+        for pose in poses_of(ch):
+            d = build(ch, pose); out[f"{ch.key}-{pose}"] = finish_all(d.m, d.anchor, "w" if ch.key[0] == "w" else "k", lichten=lichten)
     if report: report(f"people: {len(out)} sprites, {N} customers")
     return out
 

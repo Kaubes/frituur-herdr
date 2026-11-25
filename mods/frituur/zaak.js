@@ -7,12 +7,13 @@ import { div, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { layout, nextCommand, run, settings, shared } from "herdr";
 import { ANCHORS as A } from "./anchors-data.js";
-import { OUTFITS } from "./sprites-data.js";
-import { ART, C, FONT, KLEUR, animOn, clip, findNode, frames2, hash, sprite, toggleAnim } from "./kit.js";
+import { DECOR, OUTFITS, WEER } from "./sprites-data.js";
+import { ART, C, FONT, KLEUR, animOn, beurt, clip, findNode, frames2, hash, leeft, sprite, toggleAnim } from "./kit.js";
 import { Loper } from "./loper.js";
 import { HOOGTE } from "./paal.js";
 import { Staat, opRang } from "./staat.js";
 import { T, zeg } from "./tekst.js";
+import { KEUZE, haalWeer, moment, volgende } from "./weer.js";
 
 const [W, H] = A.stage; // what is drawn: the 16:9 room and more floor below it
 const [CORE_X0, CORE_X1, CORE_H] = A.core; // what must always show
@@ -24,11 +25,22 @@ const LADE = 420; // the drawer's working height
 const ROEPT = 8000; // "Nummer 12!" is called this long
 const BLIJFT = 4000; // a worker stays with a task at least this long
 const COOKING = new Set(["denkt", "diepvries", "bakt", "schudt", "test", "olie", "wacht"]);
+// A full round of two pictures that take turns, ms: the season's things and the weather.
+const TEMPO = { regenL0: 260, regenR0: 260, sneeuwL0: 1500, sneeuwR0: 1500, lichtjes0: 1700, kerstboom0: 1900, ventilator0: 240 };
 
 export default class Zaak {
   init(pr, cx) {
     this.staat = new Staat(pr.demo);
     this.staat.start(cx);
+    this.pr = pr;
+    this.nu = "";
+    // The time of day, season and weather change a few times a day: once a minute is often enough to look.
+    cx.timer.every(60000, (cx) => {
+      const m = moment(this.pr);
+      if (`${m.licht} ${m.seizoen} ${m.weer}` !== this.nu) cx.notify();
+      if (this.pr.plaats) cx.spawn(async (cx) => { if (await haalWeer(this.pr.plaats)) cx.notify(); });
+    });
+    if (pr.plaats) cx.spawn(async (cx) => { if (await haalWeer(pr.plaats)) cx.notify(); });
     this.size = { width: 1690, height: 960 };
     this.klanten = new Map(); // address -> { loper, plek, s, weg }
     this.mand = new Map(); // address -> basket 0..3
@@ -39,6 +51,7 @@ export default class Zaak {
         const c = await nextCommand();
         if (c === "lade") this.lade();
         if (c === "animaties") toggleAnim();
+        if (c in KEUZE) volgende(c); // frituur.tijd, frituur.seizoen, frituur.weer: the next choice
         cx.notify();
       }
     });
@@ -214,8 +227,8 @@ export default class Zaak {
       kids = anim ? frames2(s, `${o}-stap0${r}`, `${o}-stap1${r}`, 0, 0, 520) : [sprite(s, `${o}-stap1${r}`, 0, 0)];
     } else if (inRij && !loper.walking) kids = [sprite(s, `${o}-stap1`, 0, 0)];
     else if (d.fase === "wacht") kids = [sprite(s, `${o}-leun`, 0, 0)];
-    else if (d.fase === "eet" && !k.weg) kids = [sprite(s, `${o}-eet`, 0, 0)];
-    else kids = [sprite(s, `${o}-sta`, 0, 0)];
+    else if (d.fase === "eet" && !k.weg) kids = anim ? leeft(s, `${o}-eet`, 0, 0, d.addr) : [sprite(s, `${o}-eet`, 0, 0)];
+    else kids = anim ? leeft(s, `${o}-sta`, 0, 0, d.addr) : [sprite(s, `${o}-sta`, 0, 0)];
     return el.children(kids) // each sprite carries its own contact shadow
       .child(div().id(`klik-${d.addr}`).absolute().left(-22 * s.u).top(-98 * s.u).w(44 * s.u).h(98 * s.u).cursor_pointer()
         .on_click(() => {
@@ -294,9 +307,11 @@ export default class Zaak {
     if (side) {
       const r = side === "r" ? "-r" : "";
       kids = anim ? frames2(s, `${n}-stap0${r}`, `${n}-stap1${r}`, 0, 0, 440) : [sprite(s, `${n}-stap1${r}`, 0, 0)];
-    } else if (!w.taak) kids = [sprite(s, `${n}-sta`, 0, 0)];
-    else if (w.taak.pose2 && anim) kids = frames2(s, `${n}-${w.taak.pose}`, `${n}-${w.taak.pose2}`, 0, 0, 420);
-    else kids = [sprite(s, `${n}-${w.taak.pose}`, 0, 0)];
+    } else if (w.taak?.pose2 && anim) kids = frames2(s, `${n}-${w.taak.pose}`, `${n}-${w.taak.pose2}`, 0, 0, 420);
+    else {
+      const naam = `${n}-${w.taak?.pose ?? "sta"}`; // standing and talking they blink, at rest they find something to do
+      kids = anim ? leeft(s, naam, 0, 0, n) : [sprite(s, naam, 0, 0)];
+    }
     return w.loper.place(div().id(`werker-${w.i}`), s.u).children(kids);
   }
 
@@ -314,7 +329,12 @@ export default class Zaak {
     if (Math.abs(schaal - Math.round(schaal)) < 0.04) schaal = Math.round(schaal); // whole scales are sharpest
     schaal = Math.max(1, schaal);
     const k = Math.min(4, Math.max(2, Math.ceil(schaal)));
-    const s = { k, u: schaal / zoom };
+    const m = moment(this.pr);
+    this.nu = `${m.licht} ${m.seizoen} ${m.weer}`;
+    const s = { k, u: schaal / zoom, l: m.licht };
+    // the season's things and the weather, per layer: achter (on the room), toog (on the counter), voor (in front of all)
+    const extra = (waar) => [...(WEER[m.weer]?.[waar] ?? []), ...(DECOR[m.seizoen]?.[waar] ?? [])]
+      .flatMap((g) => (anim ? beurt(s, g, 0, 0, TEMPO[g[0]] ?? 1200) : [sprite(s, g[0], 0, 0)]));
     const left = Math.round((w - W * schaal) / 2) / zoom;
 
     // beyond the queue one person in the doorway stands for all of them
@@ -323,14 +343,16 @@ export default class Zaak {
     const rang = opRang(list);
     const led = rang.find((x) => x.fase === "wacht") ?? rang.find((x) => x.fase === "klaar") ?? rang.find((x) => x.status === "working") ?? rang[0];
     const bel = rang.find((x) => x.fase === "wacht");
-    const laag = (naam) => image(`${ART}/${k}x/${naam}.png`).absolute().left(0).top(0).w(W * s.u).h(H * s.u);
+    const laag = (naam) => image(`${ART}/${k}x/${m.licht}/${naam}.png`).absolute().left(0).top(0).w(W * s.u).h(H * s.u);
     const D = A.ticket_display;
 
     const stage = div().absolute().left(left).top(0).w(W * s.u).h(H * s.u)
       .child(laag("scene"))
+      .children(extra("achter"))
       .children([0, 1, 2, 3].flatMap((i) => this.frituurmand(s, i, bij.get(i), anim)))
       .children([...this.werkers].sort((a, b) => a.loper.y - b.loper.y).map((w) => this.werker(s, w, anim)))
       .child(laag("counter_overlay"))
+      .children(extra("toog"))
       // the live ticket number
       .child(div().absolute().left(D.x * s.u).top(D.y * s.u).w(D.w * s.u).h(D.h * s.u).flex().items_center().justify_center()
         .child(this.text(s, 12, C.led).child(led ? T.nr(led.ticket) : "")))
@@ -346,6 +368,7 @@ export default class Zaak {
       })
       .children(op.map((x) => this.klant(s, x, now, anim)))
       .child(laag("front_overlay"))
+      .children(extra("voor"))
       .children(op.flatMap((x) => this.praat(s, x, anim)))
       .when(this.extra > 0, (el) => el.child(this.ballon(s, QUEUE[0].head[0] + 34, QUEUE[0].head[1] - 4, T.meer(this.extra), C.papier, C.inkt, C.rand)));
 
